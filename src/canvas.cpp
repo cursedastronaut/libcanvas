@@ -132,8 +132,8 @@ void cvNewFrame(void)
 {
 	IM_ASSERT(gContext && "cvNewFrame: not initialized");
 
-	ImGui_ImplOpenGL3_NewFrame();
 	ImGui_ImplGlfw_NewFrame();
+	ImGui_ImplOpenGL3_NewFrame();
 	ImGui::NewFrame();
 
 	ImGui::Begin("Canvas");
