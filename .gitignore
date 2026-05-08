@@ -7,13 +7,19 @@ libcanvas.a
 
 third_party/cimgui/*.json
 third_party/cimgui/*.lua
+third_party/cimgui/.github
+third_party/cimgui/backend_test
+third_party/cimgui/generator
 third_party/cimgui/overloads.txt
 third_party/cimgui/*.sh
-third_party/imgui-1.80/.github
-third_party/imgui-1.80/docs
-third_party/imgui-1.80/examples
-third_party/imgui-1.80/backends/*
-!third_party/imgui-1.80/backends/imgui_impl_glfw.cpp
-!third_party/imgui-1.80/backends/imgui_impl_opengl3.cpp
-!third_party/imgui-1.80/backends/imgui_impl_glfw.h
-!third_party/imgui-1.80/backends/imgui_impl_opengl3.h
+third_party/cimgui/test
+third_party/cimgui/*.yml
+third_party/cimgui/*.txt
+third_party/imgui-1.88
+third_party/imgui-1.88/docs
+third_party/imgui-1.88/examples
+third_party/imgui-1.88/backends/*
+!third_party/imgui-1.88/backends/imgui_impl_glfw.cpp
+!third_party/imgui-1.88/backends/imgui_impl_opengl3.cpp
+!third_party/imgui-1.88/backends/imgui_impl_glfw.h
+!third_party/imgui-1.88/backends/imgui_impl_opengl3.h

@@ -8,9 +8,9 @@ OBJ_DIR := $(BUILD_DIR)/obj
 
 INCLUDES := \
 	-Iinclude \
-	-Ithird_party/imgui-1.80 \
-	-Ithird_party/imgui-1.80/backends \
-	-Ithird_party/imgui-1.80/misc/cpp \
+	-Ithird_party/cimgui/imgui \
+	-Ithird_party/cimgui/imgui/backends \
+	-Ithird_party/cimgui/imgui/misc/cpp \
 	-Ithird_party/cimgui
 
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra $(INCLUDES) \
@@ -25,14 +25,14 @@ CFLAGS := -O2 -Wall -Wextra $(INCLUDES) -fPIC
 # =========================
 
 IMGUI := \
-	third_party/imgui-1.80/imgui.cpp \
-	third_party/imgui-1.80/imgui_draw.cpp \
-	third_party/imgui-1.80/imgui_tables.cpp \
-	third_party/imgui-1.80/imgui_widgets.cpp \
-	third_party/imgui-1.80/imgui_demo.cpp \
-	third_party/imgui-1.80/misc/cpp/imgui_stdlib.cpp \
-	third_party/imgui-1.80/backends/imgui_impl_glfw.cpp \
-	third_party/imgui-1.80/backends/imgui_impl_opengl3.cpp
+	third_party/cimgui/imgui/imgui.cpp \
+	third_party/cimgui/imgui/imgui_draw.cpp \
+	third_party/cimgui/imgui/imgui_tables.cpp \
+	third_party/cimgui/imgui/imgui_widgets.cpp \
+	third_party/cimgui/imgui/imgui_demo.cpp \
+	third_party/cimgui/imgui/misc/cpp/imgui_stdlib.cpp \
+	third_party/cimgui/imgui/backends/imgui_impl_glfw.cpp \
+	third_party/cimgui/imgui/backends/imgui_impl_opengl3.cpp
 
 # =========================
 # CIMGUI (depends on ImGui)
