@@ -109,6 +109,14 @@ void cvInit(GLFWwindow* window, CanvasConfig config)
 		config.fontSize,
 		&cfg
 	);
+
+	// Force font atlas build
+	unsigned char* pixels;
+	int width, height;
+	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+	// Upload texture via backend
+	ImGui_ImplOpenGL3_CreateFontsTexture();
 }
 
 void cvShutdown(void)
