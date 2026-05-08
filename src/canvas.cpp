@@ -11,7 +11,7 @@
 #include <cstdlib>
 #include <cstdarg>
 #include <cstring>
-#include <cimgui.h>
+#include <cmath>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -33,11 +33,10 @@ struct CanvasContext
 	bool showGrid;
 
 	// Affine transform:
-	// screen.x = x*m00 + tx + y*m01
-	// screen.y = x*m10 + ty + y*m11
+	// screen = origin + x * right + y * top
 	float tx, ty;
-	float m00, m10;
-	float m01, m11;
+	float m00, m10; // right vector
+	float m01, m11; // top vector
 
 	ImFont* font;
 };
@@ -50,7 +49,7 @@ static CanvasContext* gContext = nullptr;
 
 CanvasConfig cvGetDefaultConfig(void)
 {
-	CanvasConfig cfg;
+	CanvasConfig cfg{};
 	cfg.backgroundColor = CV_COL32(30, 30, 30, 255);
 	cfg.fontSize = 16.0f;
 	cfg.pointRadius = 4.0f;
@@ -70,25 +69,32 @@ void cvInit(GLFWwindow* window, CanvasConfig config)
 		return;
 	}
 
+	IM_ASSERT(window && "cvInit requires valid GLFWwindow");
+
 	gContext = (CanvasContext*)calloc(1, sizeof(CanvasContext));
+	IM_ASSERT(gContext && "Failed to allocate CanvasContext");
 
 	gContext->window = window;
 	gContext->backgroundColor = config.backgroundColor;
 	gContext->fontSize = config.fontSize;
 	gContext->pointRadius = config.pointRadius;
 	gContext->lineThickness = config.lineThickness;
+	gContext->showCoordSystem = false;
+	gContext->showGrid = false;
 
-	// default coordinate system = identity
+	// Identity transform by default
 	gContext->tx = 0.0f;
 	gContext->ty = 0.0f;
 	gContext->m00 = 1.0f;
-	gContext->m11 = 1.0f;
-	gContext->m01 = 0.0f;
 	gContext->m10 = 0.0f;
+	gContext->m01 = 0.0f;
+	gContext->m11 = 1.0f;
 
 	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
 	{
 		fprintf(stderr, "Failed to initialize GLAD\n");
+		free(gContext);
+		gContext = nullptr;
 		return;
 	}
 
@@ -102,27 +108,30 @@ void cvInit(GLFWwindow* window, CanvasConfig config)
 	ImGuiIO& io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-	gContext->font = io.Fonts->AddFontDefault();
-	ImFontConfig cfg;
+	ImFontConfig fontCfg{};
 	gContext->font = io.Fonts->AddFontFromFileTTF(
 		"assets/Roboto-Regular.ttf",
 		config.fontSize,
-		&cfg
+		&fontCfg
 	);
 
-	// Force font atlas build
-	unsigned char* pixels;
-	int width, height;
+	if (!gContext->font)
+		gContext->font = io.Fonts->AddFontDefault();
+
+	unsigned char* pixels = nullptr;
+	int width = 0, height = 0;
 	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
-	// Upload texture via backend
 	ImGui_ImplOpenGL3_CreateFontsTexture();
 }
 
 void cvShutdown(void)
 {
 	if (!gContext)
+	{
 		IM_ASSERT(false && "cvShutdown: Canvas not initialized");
+		return;
+	}
 
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
@@ -158,16 +167,16 @@ void cvNewFrame(void)
 	{
 		ImU32 col = IM_COL32(200, 200, 200, 60);
 
-		for (int i = -5; i <= 5; i++)
+		for (int i = -5; i <= 5; ++i)
 		{
 			float x0, y0, x1, y1;
 
-			cvCoordsToScreenSpace(i, -5, &x0, &y0);
-			cvCoordsToScreenSpace(i,  5, &x1, &y1);
+			cvCoordsToScreenSpace((float)i, -5.f, &x0, &y0);
+			cvCoordsToScreenSpace((float)i, 5.f, &x1, &y1);
 			dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), col);
 
-			cvCoordsToScreenSpace(-5, i, &x0, &y0);
-			cvCoordsToScreenSpace( 5, i, &x1, &y1);
+			cvCoordsToScreenSpace(-5.f, (float)i, &x0, &y0);
+			cvCoordsToScreenSpace(5.f, (float)i, &x1, &y1);
 			dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), col);
 		}
 	}
@@ -177,13 +186,13 @@ void cvNewFrame(void)
 	{
 		float x0, y0, x1, y1;
 
-		cvCoordsToScreenSpace(-10, 0, &x0, &y0);
-		cvCoordsToScreenSpace( 10, 0, &x1, &y1);
-		dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(255, 0, 0, 255));
+		cvCoordsToScreenSpace(-10.0f, 0.0f, &x0, &y0);
+		cvCoordsToScreenSpace(10.0f, 0.0f, &x1, &y1);
+		dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(255, 0, 0, 255), 2.0f);
 
-		cvCoordsToScreenSpace(0, -10, &x0, &y0);
-		cvCoordsToScreenSpace(0,  10, &x1, &y1);
-		dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(0, 255, 0, 255));
+		cvCoordsToScreenSpace(0.0f, -10.0f, &x0, &y0);
+		cvCoordsToScreenSpace(0.0f, 10.0f, &x1, &y1);
+		dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(0, 255, 0, 255), 2.0f);
 	}
 }
 
@@ -199,10 +208,10 @@ void cvEndFrame(void)
 
 	uint32_t c = gContext->backgroundColor;
 	glClearColor(
-		((c >> 0) & 0xFF) / 255.0f,
-		((c >> 8) & 0xFF) / 255.0f,
-		((c >> 16) & 0xFF) / 255.0f,
-		((c >> 24) & 0xFF) / 255.0f
+		((c >> CV_COL32_R_SHIFT) & 0xFF) / 255.0f,
+		((c >> CV_COL32_G_SHIFT) & 0xFF) / 255.0f,
+		((c >> CV_COL32_B_SHIFT) & 0xFF) / 255.0f,
+		((c >> CV_COL32_A_SHIFT) & 0xFF) / 255.0f
 	);
 
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -230,33 +239,42 @@ CanvasConfig* cvGetConfig(void)
 // -------------------------
 
 void cvSetCoordinateSystemFromScreenSpace(
-	float ox, float oy,
-	float rx, float ry,
-	float tx, float ty)
+	float originX, float originY,
+	float rightX, float rightY,
+	float topX, float topY)
 {
-	gContext->tx = ox;
-	gContext->ty = oy;
-	gContext->m00 = rx;
-	gContext->m11 = ry;
-	gContext->m01 = tx;
-	gContext->m10 = ty;
+	IM_ASSERT(gContext && "cvSetCoordinateSystemFromScreenSpace: not initialized");
+
+	gContext->tx = originX;
+	gContext->ty = originY;
+
+	gContext->m00 = rightX;
+	gContext->m10 = rightY;
+
+	gContext->m01 = topX;
+	gContext->m11 = topY;
 }
 
 void cvCoordsToScreenSpace(float x, float y, float* sx, float* sy)
 {
-	*sx = x * gContext->m00 + gContext->tx + y * gContext->m01;
-	*sy = x * gContext->m10 + gContext->ty + y * gContext->m11;
+	IM_ASSERT(gContext);
+
+	*sx = x * gContext->m00 + y * gContext->m01 + gContext->tx;
+	*sy = x * gContext->m10 + y * gContext->m11 + gContext->ty;
 }
 
 void cvCoordsFromScreenSpace(float sx, float sy, float* x, float* y)
 {
-	float det = gContext->m10 * gContext->m01 - gContext->m00 * gContext->m11;
+	IM_ASSERT(gContext);
 
 	float dx = sx - gContext->tx;
 	float dy = sy - gContext->ty;
 
-	*x = (dx * gContext->m11 - dy * gContext->m01) / det;
-	*y = (dy * gContext->m00 - dx * gContext->m10) / det;
+	float det = gContext->m00 * gContext->m11 - gContext->m01 * gContext->m10;
+	IM_ASSERT(fabs(det) > 1e-8f && "Coordinate system determinant is zero");
+
+	*x = ( dx * gContext->m11 - dy * gContext->m01) / det;
+	*y = (-dx * gContext->m10 + dy * gContext->m00) / det;
 }
 
 // -------------------------
@@ -281,9 +299,11 @@ void cvAddNamedPoint(float x, float y, unsigned int color, const char* name)
 	cvCoordsToScreenSpace(x, y, &sx, &sy);
 
 	ImDrawList* dl = ImGui::GetBackgroundDrawList();
-
 	dl->AddCircleFilled(ImVec2(sx, sy), gContext->pointRadius, color);
+
+	ImGui::PushFont(gContext->font);
 	dl->AddText(ImVec2(sx + 4, sy + 4), color, name);
+	ImGui::PopFont();
 }
 
 void cvAddLine(float x0, float y0, float x1, float y1, unsigned int color)
@@ -330,7 +350,6 @@ void cvPathLineTo(float x, float y)
 {
 	float sx, sy;
 	cvCoordsToScreenSpace(x, y, &sx, &sy);
-
 	ImGui::GetBackgroundDrawList()->PathLineTo(ImVec2(sx, sy));
 }
 
@@ -367,13 +386,26 @@ CvTexture cvLoadTexture(const char* path)
 	glGenTextures(1, &id);
 	glBindTexture(GL_TEXTURE_2D, id);
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
-				 GL_RGBA, GL_UNSIGNED_BYTE, data);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexImage2D(
+		GL_TEXTURE_2D,
+		0,
+		GL_RGBA,
+		w,
+		h,
+		0,
+		GL_RGBA,
+		GL_UNSIGNED_BYTE,
+		data
+	);
+
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glGenerateMipmap(GL_TEXTURE_2D);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+	glGenerateMipmap(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, 0);
 
 	stbi_image_free(data);
@@ -387,7 +419,8 @@ CvTexture cvLoadTexture(const char* path)
 void cvUnloadTexture(CvTexture texture)
 {
 	GLuint id = (GLuint)(uintptr_t)texture.id;
-	glDeleteTextures(1, &id);
+	if (id)
+		glDeleteTextures(1, &id);
 }
 
 void cvAddTexture(float x, float y, CvTexture texture)
@@ -395,11 +428,9 @@ void cvAddTexture(float x, float y, CvTexture texture)
 	float sx, sy;
 	cvCoordsToScreenSpace(x, y, &sx, &sy);
 
-	ImVec2 size((float)texture.width, (float)texture.height);
-
 	ImGui::GetBackgroundDrawList()->AddImage(
 		(ImTextureID)(uintptr_t)texture.id,
 		ImVec2(sx, sy),
-		ImVec2(sx + size.x, sy + size.y)
+		ImVec2(sx + texture.width, sy + texture.height)
 	);
 }
