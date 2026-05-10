@@ -5,6 +5,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
@@ -12,6 +13,7 @@
 #include <cstdarg>
 #include <cstring>
 #include <cmath>
+#include <cassert>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -22,38 +24,75 @@
 
 struct CanvasContext
 {
-	uint32_t backgroundColor;
-	GLFWwindow* window;
-
-	float fontSize;
-	float pointRadius;
-	float lineThickness;
-
-	bool showCoordSystem;
-	bool showGrid;
-
-	// Affine transform:
-	// screen = origin + x * right + y * top
-	float tx, ty;
-	float m00, m10; // right vector
-	float m01, m11; // top vector
-
-	ImFont* font;
+	CanvasConfig	config;
+	GLFWwindow*		window;
+	bool			showCoordSystem;
+	bool			showGrid;
+	
+	// Affine coordinate system:
+	// screen = origin + x * right + y * up
+	ImVec2			origin;
+	ImVec2			right;
+	ImVec2			up;
+	
+	ImFont*			font;
 };
 
 static CanvasContext* gContext = nullptr;
 
 // -------------------------
+// Internal helpers
+// -------------------------
+
+static inline void cvAssertInitialized(const char* fn)
+{
+	IM_ASSERT(gContext && fn);
+}
+
+static ImVec2 ScreenFromCoords(float x, float y)
+{
+	cvAssertInitialized("Canvas was not initialized");
+
+	return ImVec2(
+		gContext->origin.x + x * gContext->right.x + y * gContext->up.x,
+		gContext->origin.y + x * gContext->right.y + y * gContext->up.y
+	);
+}
+
+static ImVec2 CoordsFromScreen(float sx, float sy)
+{
+	cvAssertInitialized("Canvas was not initialized");
+
+	const float ox = gContext->origin.x;
+	const float oy = gContext->origin.y;
+	const float rx = gContext->right.x;
+	const float ry = gContext->right.y;
+	const float ux = gContext->up.x;
+	const float uy = gContext->up.y;
+
+	const float det = ux * ry - uy * rx;
+	IM_ASSERT(det != 0.0f && "Coordinate system matrix is singular");
+
+	const float inv = 1.0f / det;
+
+	const float x = (-sx * uy + sy * ux + ox * uy - oy * ux) * inv;
+	const float y = ( sx * ry - sy * rx - ox * ry + oy * rx) * inv;
+
+	return ImVec2(x, y);
+}
+
+// -------------------------
 // Default config
 // -------------------------
 
-CanvasConfig cvGetDefaultConfig(void)
+extern "C" CanvasConfig cvGetDefaultConfig(void)
 {
 	CanvasConfig cfg{};
-	cfg.backgroundColor = CV_COL32(30, 30, 30, 255);
-	cfg.fontSize = 30.0f;
-	cfg.pointRadius = 3.0f;
-	cfg.lineThickness = 3.0f;
+	cfg.backgroundColor		= CV_COL32(30, 30, 30, 255);
+	cfg.fontSize			= 30.0f;
+	cfg.pointRadius			= 3.0f;
+	cfg.lineThickness		= 3.0f;
+	cfg.hideInternalWindow = 0;
 	return cfg;
 }
 
@@ -61,34 +100,22 @@ CanvasConfig cvGetDefaultConfig(void)
 // Init / Shutdown
 // -------------------------
 
-void cvInit(GLFWwindow* window, CanvasConfig config)
+extern "C" void cvInit(GLFWwindow* window, const CanvasConfig config)
 {
-	if (gContext)
-	{
-		IM_ASSERT(false && "cvInit(): cvInit must be called once at startup.");
-		return;
-	}
+	IM_ASSERT(gContext == nullptr && "cvInit(): cvInit must be called once at startup.");
+	IM_ASSERT(window && "cvInit(): valid GLFWwindow required.");
 
-	IM_ASSERT(window && "cvInit requires valid GLFWwindow");
-
-	gContext = (CanvasContext*)calloc(1, sizeof(CanvasContext));
+	gContext = static_cast<CanvasContext*>(calloc(1, sizeof(CanvasContext)));
 	IM_ASSERT(gContext && "Failed to allocate CanvasContext");
 
 	gContext->window = window;
-	gContext->backgroundColor = config.backgroundColor;
-	gContext->fontSize = config.fontSize;
-	gContext->pointRadius = config.pointRadius;
-	gContext->lineThickness = config.lineThickness;
+	gContext->config = config;
+	// Default coordinate system = screen space
+	gContext->origin = ImVec2(0.0f, 0.0f);
+	gContext->right  = ImVec2(1.0f, 0.0f);
+	gContext->up     = ImVec2(0.0f, 1.0f);
 	gContext->showCoordSystem = false;
 	gContext->showGrid = false;
-
-	// Identity transform by default
-	gContext->tx = 0.0f;
-	gContext->ty = 0.0f;
-	gContext->m00 = 1.0f;
-	gContext->m10 = 0.0f;
-	gContext->m01 = 0.0f;
-	gContext->m11 = 1.0f;
 
 	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
 	{
@@ -113,8 +140,7 @@ void cvInit(GLFWwindow* window, CanvasConfig config)
 
 	gContext->font = io.Fonts->AddFontFromFileTTF(
 		"assets/Roboto-Regular.ttf",
-		gContext->fontSize,
-		nullptr
+		gContext->config.fontSize
 	);
 
 	if (!gContext->font)
@@ -123,9 +149,9 @@ void cvInit(GLFWwindow* window, CanvasConfig config)
 	ImGui_ImplOpenGL3_CreateFontsTexture();
 }
 
-void cvShutdown(void)
+extern "C" void cvShutdown(void)
 {
-	IM_ASSERT(gContext && "cvShutdown(): Canvas is not initialized");
+	cvAssertInitialized("cvShutdown(): Canvas was not initialized");
 
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
@@ -135,61 +161,76 @@ void cvShutdown(void)
 	gContext = nullptr;
 }
 
-void cvNewFrame(void)
+// -------------------------
+// Frame lifecycle
+// -------------------------
+
+extern "C" void cvNewFrame(void)
 {
-	IM_ASSERT(gContext && "cvNewFrame(): Canvas is not initialized");
+	cvAssertInitialized("cvNewFrame(): Canvas was not initialized");
 
 	ImGui_ImplOpenGL3_NewFrame();
 	ImGui_ImplGlfw_NewFrame();
 	ImGui::NewFrame();
 
-	ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-
-	if (ImGui::Begin("Canvas", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+	if (!gContext->config.hideInternalWindow)
 	{
-		ImGui::Checkbox("Display coordinate system", &gContext->showCoordSystem);
-		ImGui::Checkbox("Draw grid", &gContext->showGrid);
+		ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), ImGuiCond_Always);
+
+		ImGuiWindowFlags flags =
+			ImGuiWindowFlags_NoMove |
+			ImGuiWindowFlags_NoDecoration |
+			ImGuiWindowFlags_AlwaysAutoResize;
+
+		if (ImGui::Begin("Canvas", nullptr, flags))
+		{
+			ImGui::Checkbox("Display coordinate system", &gContext->showCoordSystem);
+			ImGui::Checkbox("Draw grid", &gContext->showGrid);
+		}
+		ImGui::End();
 	}
-	ImGui::End();
 
 	ImDrawList* dl = ImGui::GetBackgroundDrawList();
 
 	// ---------------- Grid ----------------
 	if (gContext->showGrid)
 	{
-		ImU32 col = IM_COL32(255, 255, 255, 60);
+		constexpr int halfWidth  = 5;
+		constexpr int halfHeight = 5;
+		const ImU32 color = IM_COL32(255, 255, 255, 64);
 
-		for (int i = -5; i <= 5; ++i)
-		{
-			float x0, y0, x1, y1;
+		for (int y = -halfHeight; y <= halfHeight; ++y)
+			dl->AddLine(
+				ScreenFromCoords((float)-halfWidth, (float)y),
+				ScreenFromCoords((float)+halfWidth, (float)y),
+				color,
+				1.0f
+			);
 
-			cvCoordsToScreenSpace((float)i, -5.f, &x0, &y0);
-			cvCoordsToScreenSpace((float)i, 5.f, &x1, &y1);
-			dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), col);
-
-			cvCoordsToScreenSpace(-5.f, (float)i, &x0, &y0);
-			cvCoordsToScreenSpace(5.f, (float)i, &x1, &y1);
-			dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), col);
-		}
+		for (int x = -halfWidth; x <= halfWidth; ++x)
+			dl->AddLine(
+				ScreenFromCoords((float)x, (float)-halfHeight),
+				ScreenFromCoords((float)x, (float)+halfHeight),
+				color,
+				1.0f
+			);
 	}
 
-	// ---------------- Axes ----------------
+	// ---------------- Coordinate axes ----------------
 	if (gContext->showCoordSystem)
 	{
-		float ox, oy, rx, ry, tx, ty;
+		const ImVec2 origin = ScreenFromCoords(0.f, 0.f);
+		const ImVec2 xAxis  = ScreenFromCoords(1.f, 0.f);
+		const ImVec2 yAxis  = ScreenFromCoords(0.f, 1.f);
 
-		cvCoordsToScreenSpace(0.0f, 0.0f, &ox, &oy);
-		cvCoordsToScreenSpace(1.0f, 0.0f, &rx, &ry);
-		cvCoordsToScreenSpace(0.0f, 1.0f, &tx, &ty);
-
-		dl->AddLine(ImVec2(ox, oy), ImVec2(rx, ry), IM_COL32(255, 0, 0, 255), 1.0f);
-		dl->AddLine(ImVec2(ox, oy), ImVec2(tx, ty), IM_COL32(0, 255, 0, 255), 1.0f);
+		dl->AddLine(origin, xAxis, IM_COL32(255, 0, 0, 255), 1.0f);
+		dl->AddLine(origin, yAxis, IM_COL32(0, 255, 0, 255), 1.0f);
 	}
 }
 
-void cvEndFrame(void)
+extern "C" void cvEndFrame(void)
 {
-	IM_ASSERT(gContext && "cvEndFrame(): Canvas was not initialized");
+	cvAssertInitialized("cvEndFrame(): Canvas was not initialized");
 
 	ImGui::Render();
 
@@ -197,14 +238,8 @@ void cvEndFrame(void)
 	glfwGetFramebufferSize(gContext->window, &w, &h);
 	glViewport(0, 0, w, h);
 
-	uint32_t c = gContext->backgroundColor;
-	glClearColor(
-		((c >> CV_COL32_R_SHIFT) & 0xFF) / 255.0f,
-		((c >> CV_COL32_G_SHIFT) & 0xFF) / 255.0f,
-		((c >> CV_COL32_B_SHIFT) & 0xFF) / 255.0f,
-		((c >> CV_COL32_A_SHIFT) & 0xFF) / 255.0f
-	);
-
+	ImVec4 clearColor = ImColor(gContext->config.backgroundColor);
+	glClearColor(clearColor.x, clearColor.y, clearColor.z, clearColor.w);
 	glClear(GL_COLOR_BUFFER_BIT);
 	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
@@ -213,159 +248,179 @@ void cvEndFrame(void)
 // Config access
 // -------------------------
 
-CanvasConfig* cvGetConfig(void)
+extern "C" CanvasConfig* cvGetConfig(void)
 {
-	IM_ASSERT(gContext && "cvChangeConfig(): Canvas was not initialized");
-	return (CanvasConfig*)gContext;
+	cvAssertInitialized("cvGetConfig(): Canvas was not initialized");
+	return &gContext->config;
 }
 
 // -------------------------
-// Coordinate transforms
+// Coordinate system API
 // -------------------------
 
-void cvSetCoordinateSystemFromScreenSpace(
-	float originX, float originY,
-	float rightX, float rightY,
-	float topX, float topY)
+extern "C" void cvSetCoordinateSystemFromScreenSpace(
+	float originX,	float originY,
+	float rightX,	float rightY,
+	float upX,		float upY)
 {
-	IM_ASSERT(gContext && "cvSetCoordinateSystemFromScreenSpace(): Canvas was not initialized");
+	cvAssertInitialized("cvSetCoordinateSystemFromScreenSpace(): Canvas was not initialized");
 
-	gContext->tx = originX;
-	gContext->ty = originY;
-
-	gContext->m00 = rightX;
-	gContext->m10 = rightY;
-
-	gContext->m01 = topX;
-	gContext->m11 = topY;
+	gContext->origin = ImVec2(originX, originY);
+	gContext->right  = ImVec2(rightX, rightY);
+	gContext->up     = ImVec2(upX, upY);
 }
 
-void cvCoordsToScreenSpace(float x, float y, float* sx, float* sy)
+extern "C" void cvCoordsToScreenSpace(float x, float y, float* sx, float* sy)
 {
-	IM_ASSERT(gContext && "cvCoordsToScreenSpace(): Canvas was not initialized");
+	cvAssertInitialized("cvCoordsToScreenSpace(): Canvas was not initialized");
+	IM_ASSERT(sx && sy);
 
-	*sx = x * gContext->m00 + y * gContext->m01 + gContext->tx;
-	*sy = x * gContext->m10 + y * gContext->m11 + gContext->ty;
+	ImVec2 p = ScreenFromCoords(x, y);
+	*sx = p.x;
+	*sy = p.y;
 }
 
-void cvCoordsFromScreenSpace(float sx, float sy, float* x, float* y)
+extern "C" void cvCoordsFromScreenSpace(float sx, float sy, float* x, float* y)
 {
-	IM_ASSERT(gContext && "cvCoordsFromScreenSpace(): Canvas was not initialized");
+	cvAssertInitialized("cvCoordsFromScreenSpace(): Canvas was not initialized");
+	IM_ASSERT(x && y);
 
-	float det = gContext->m10 * gContext->m01 - gContext->m00 * gContext->m11;
-
-	*x = (sy * gContext->m01 - sx * gContext->m11 + gContext->m11 * gContext->tx - gContext->m01 * gContext->ty) / det;
-	*y = (sx * gContext->m10 - sy * gContext->m00 - gContext->tx * gContext->m10 + gContext->ty * gContext->m00) / det;
+	ImVec2 p = CoordsFromScreen(sx, sy);
+	*x = p.x;
+	*y = p.y;
 }
 
 // -------------------------
 // Drawing primitives
 // -------------------------
 
-void cvAddPoint(float x, float y, unsigned int color)
+extern "C" void cvAddPoint(float x, float y, unsigned int color)
 {
-	float sx, sy;
-	cvCoordsToScreenSpace(x, y, &sx, &sy);
+	cvAssertInitialized("cvAddPoint(): Canvas was not initialized");
 
 	ImGui::GetBackgroundDrawList()->AddCircleFilled(
-		ImVec2(sx, sy),
-		gContext->pointRadius,
+		ScreenFromCoords(x, y),
+		gContext->config.pointRadius,
 		color
 	);
 }
 
-void cvAddNamedPoint(float x, float y, unsigned int color, const char* name)
+extern "C" void cvAddNamedPoint(float x, float y, unsigned int color, const char* name)
 {
-	float sx, sy;
-	cvCoordsToScreenSpace(x, y, &sx, &sy);
+	cvAssertInitialized("cvAddNamedPoint(): Canvas was not initialized");
 
+	ImVec2 p = ScreenFromCoords(x, y);
 	ImDrawList* dl = ImGui::GetBackgroundDrawList();
-	dl->AddCircleFilled(ImVec2(sx, sy), gContext->pointRadius, color);
+	dl->AddCircleFilled(p, gContext->config.pointRadius, color);
 
 	ImGui::PushFont(gContext->font);
-	dl->AddText(ImVec2(sx + 3, sy + 3), color, name);
+	dl->AddText(ImVec2(p.x + 3.f, p.y + 3.f), color, name ? name : "");
 	ImGui::PopFont();
 }
 
-void cvAddLine(float x0, float y0, float x1, float y1, unsigned int color)
+extern "C" void cvAddLine(float x0, float y0, float x1, float y1, unsigned int color)
 {
-	float sx0, sy0, sx1, sy1;
-	cvCoordsToScreenSpace(x0, y0, &sx0, &sy0);
-	cvCoordsToScreenSpace(x1, y1, &sx1, &sy1);
+	cvAssertInitialized("cvAddLine(): Canvas was not initialized");
 
 	ImGui::GetBackgroundDrawList()->AddLine(
-		ImVec2(sx0, sy0),
-		ImVec2(sx1, sy1),
+		ScreenFromCoords(x0, y0),
+		ScreenFromCoords(x1, y1),
 		color,
-		gContext->lineThickness
+		gContext->config.lineThickness
 	);
 }
 
-void cvAddText(float x, float y, unsigned int color, const char* text)
+extern "C" void cvAddText(float x, float y, unsigned int color, const char* text)
 {
-	float sx, sy;
-	cvCoordsToScreenSpace(x, y, &sx, &sy);
+	cvAssertInitialized("cvAddText(): Canvas was not initialized");
 
 	ImGui::PushFont(gContext->font);
-	ImGui::GetBackgroundDrawList()->AddText(ImVec2(sx, sy), color, text);
+	ImGui::GetBackgroundDrawList()->AddText(
+		ScreenFromCoords(x, y),
+		color,
+		text ? text : ""
+	);
 	ImGui::PopFont();
 }
 
-void cvAddFormattedText(float x, float y, unsigned int color, const char* fmt, ...)
+extern "C" void cvAddFormattedText(float x, float y, unsigned int color, const char* fmt, ...)
 {
-	char buf[2048];
+	cvAssertInitialized("cvAddFormattedText(): Canvas was not initialized");
+
+	char buffer[2048];
 
 	va_list args;
 	va_start(args, fmt);
-	vsnprintf(buf, sizeof(buf), fmt, args);
+	vsnprintf(buffer, sizeof(buffer), fmt, args);
 	va_end(args);
 
-	cvAddText(x, y, color, buf);
+	cvAddText(x, y, color, buffer);
 }
 
 // -------------------------
 // Path API
 // -------------------------
 
-void cvPathLineTo(float x, float y)
+extern "C" void cvPathLineTo(float x, float y)
 {
-	float sx, sy;
-	cvCoordsToScreenSpace(x, y, &sx, &sy);
-	ImGui::GetBackgroundDrawList()->PathLineTo(ImVec2(sx, sy));
+	cvAssertInitialized("cvPathLineTo(): Canvas was not initialized");
+	ImGui::GetBackgroundDrawList()->PathLineTo(ScreenFromCoords(x, y));
 }
 
-void cvPathStroke(unsigned int color, int closed)
+extern "C" void cvPathStroke(unsigned int color, int closed)
 {
-	IM_ASSERT(gContext && "cvPathStroke(): Canvas was not initialized");
-	ImGui::GetBackgroundDrawList()->PathStroke(color, closed, gContext->lineThickness);
+	cvAssertInitialized("cvPathStroke(): Canvas was not initialized");
+		ImGui::GetBackgroundDrawList()->PathStroke(color, closed, gContext->config.lineThickness);
 }
 
-void cvPathFill(unsigned int color)
+extern "C" void cvPathFill(unsigned int color)
 {
+	cvAssertInitialized("cvPathFill(): Canvas was not initialized");
 	ImGui::GetBackgroundDrawList()->PathFillConvex(color);
 }
 
-CvTexture cvLoadTexture(const char* path)
+// -------------------------
+// Texture API
+// -------------------------
+
+extern "C" CvTexture cvLoadTexture(const char* path)
 {
-	IM_ASSERT(gContext && "cvLoadTexture(): Canvas was not initialized");
+	cvAssertInitialized("cvLoadTexture(): Canvas was not initialized");
 
 	CvTexture tex{};
 
-	int w, h;
-	unsigned char* data = stbi_load(path, &w, &h, nullptr, 4);
+	if (!path)
+		return tex;
 
-	if (!data)
+	unsigned char* pixels = stbi_load(
+		path,
+		&tex.width,
+		&tex.height,
+		nullptr,
+		STBI_rgb_alpha
+	);
+
+	if (!pixels)
 	{
 		fprintf(stderr, "Failed to load texture: '%s'\n", path);
 		return tex;
 	}
 
-	GLuint id;
-	glGenTextures(1, &id);
-	glBindTexture(GL_TEXTURE_2D, id);
+	GLuint glTex = 0;
+	glGenTextures(1, &glTex);
+	glBindTexture(GL_TEXTURE_2D, glTex);
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
-				 GL_RGBA, GL_UNSIGNED_BYTE, data);
+	glTexImage2D(
+		GL_TEXTURE_2D,
+		0,
+		GL_RGBA,
+		tex.width,
+		tex.height,
+		0,
+		GL_RGBA,
+		GL_UNSIGNED_BYTE,
+		pixels
+	);
 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -373,36 +428,39 @@ CvTexture cvLoadTexture(const char* path)
 	glGenerateMipmap(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, 0);
 
-	stbi_image_free(data);
+	stbi_image_free(pixels);
 
-	tex.id = (CvTextureID)(uintptr_t)id;
-	tex.width = w;
-	tex.height = h;
-
+	tex.id = (CvTextureID)(uintptr_t)glTex;
 	return tex;
 }
 
-void cvUnloadTexture(CvTexture texture)
+extern "C" void cvUnloadTexture(CvTexture texture)
 {
-	IM_ASSERT(gContext && "cvUnloadTexture(): Canvas was not initialized");
+	cvAssertInitialized("cvUnloadTexture(): Canvas was not initialized");
 
 	GLuint id = (GLuint)(uintptr_t)texture.id;
-	glDeleteTextures(1, &id);
+	if (id != 0)
+		glDeleteTextures(1, &id);
 }
 
-void cvAddTexture(float x, float y, CvTexture texture)
+extern "C" void cvAddTexture(float x, float y, CvTexture texture)
 {
-	IM_ASSERT(gContext && "cvAddTexture(): Canvas was not initialized");
+	cvAssertInitialized("cvAddTexture(): Canvas was not initialized");
 
-	float sx, sy;
-	cvCoordsToScreenSpace(x, y, &sx, &sy);
+	if (!texture.id)
+		return;
 
-	float halfW = texture.width * 0.5f;
-	float halfH = texture.height * 0.5f;
+	ImVec2 center = ScreenFromCoords(x, y);
+
+	const float halfW = texture.width * 0.5f;
+	const float halfH = texture.height * 0.5f;
 
 	ImGui::GetBackgroundDrawList()->AddImage(
 		(ImTextureID)(uintptr_t)texture.id,
-		ImVec2(sx - halfW, sy - halfH),
-		ImVec2(sx + halfW, sy + halfH)
+		ImVec2(center.x - halfW, center.y - halfH),
+		ImVec2(center.x + halfW, center.y + halfH),
+		ImVec2(0, 0),
+		ImVec2(1, 1),
+		CV_COL32_WHITE
 	);
 }

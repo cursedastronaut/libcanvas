@@ -23,6 +23,7 @@ typedef struct CanvasConfig
 	float fontSize; // Font size cannot be changed after cvInit
 	float pointRadius;
 	float lineThickness;
+	int hideInternalWindow;
 } CanvasConfig;
 
 typedef struct CvTexture
